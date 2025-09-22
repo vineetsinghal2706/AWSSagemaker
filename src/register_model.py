@@ -1,10 +1,11 @@
 import sagemaker
-from sagemaker import get_execution_role
+
 from sagemaker.model import Model
 
 def register_model(model_file, model_package_group_name="fraud-detection-models"):
     session = sagemaker.Session()
-    role = get_execution_role()
+   role = "arn:aws:iam::893169065109:role/datazone_usr_role_6gknc254ej3jfr_5251772u38j19j"
+
 
     # Upload model to S3
     model_s3_uri = session.upload_data(path=model_file, key_prefix="models/rf")
