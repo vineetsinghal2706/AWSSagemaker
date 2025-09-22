@@ -4,7 +4,7 @@ from sagemaker.model import Model
 
 def register_model(model_file, model_package_group_name="fraud-detection-models"):
     session = sagemaker.Session()
-   role = "arn:aws:iam::893169065109:role/datazone_usr_role_6gknc254ej3jfr_5251772u38j19j"
+    role = "arn:aws:iam::893169065109:role/datazone_usr_role_6gknc254ej3jfr_5251772u38j19j"
 
 
     # Upload model to S3
