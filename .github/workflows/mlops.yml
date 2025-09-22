@@ -44,3 +44,7 @@ jobs:
     - name: Submit training job
       run: |
         python src/train.py
+
+    - name: Register model
+      run: 
+        python src/register_model.py
