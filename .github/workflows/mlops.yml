@@ -38,9 +38,9 @@ jobs:
     # Run preprocessing (splits creditcard.csv in S3 into train/infer)
     - name: Run preprocessing
       run: |
-        python src/preprocess.py
+        python preprocess.py
 
     # Submit training job to SageMaker
     - name: Submit training job
       run: |
-        python src/train.py
+        python train.py
