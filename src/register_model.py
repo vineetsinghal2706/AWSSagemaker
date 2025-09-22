@@ -1,43 +1,53 @@
+# src/register_model.py
 import sagemaker
-
+import boto3
+import os
 from sagemaker.model import Model
+from sagemaker import get_execution_role
 
-def register_model(model_file, model_package_group_name="fraud-detection-models"):
+# ✅ Initialize SageMaker session & boto3 client
+sagemaker_session = sagemaker.Session()
+sm_client = boto3.client("sagemaker")
+role = os.getenv("SAGEMAKER_ROLE_ARN", get_execution_role())
 
-    role = "arn:aws:iam::893169065109:role/datazone_usr_role_6gknc254ej3jfr_5251772u38j19j"
+def register_model(model_file, model_package_group_name="FraudDetectionModelGroup"):
+    """
+    Registers the trained model into SageMaker Model Registry
+    """
+    # Upload model artifact to S3
+    bucket = sagemaker_session.default_bucket()
+    model_artifact = sagemaker_session.upload_data(path=model_file, bucket=bucket, key_prefix="model-artifacts")
 
+    print(f"✅ Model artifact uploaded: {model_artifact}")
 
-    session = sagemaker.Session()
-    custom_bucket = "creditcardnew"   # ✅ your bucket
-    model_s3_uri = session.upload_data(
-        path=model_file,
-        bucket=custom_bucket,
-        key_prefix="models/rf"
-)
-
-
-    # Create a SageMaker Model
-    sm_model = Model(
-        image_uri="683313688378.dkr.ecr.us-east-1.amazonaws.com/sklearn-inference:1.2-1-cpu-py3",  # 🔥 Change to your region
-        model_data=model_s3_uri,
-        role=role
+    # Create model package in Model Registry
+    model_package = sm_client.create_model_package(
+        ModelPackageGroupName=model_package_group_name,
+        ModelPackageDescription="Fraud detection RandomForest model",
+        InferenceSpecification={
+            "Containers": [
+                {
+                    "Image": sagemaker.image_uris.retrieve(
+                        framework="sklearn",
+                        region=sagemaker_session.boto_region_name,
+                        version="1.2-1",  # pick sklearn version
+                    ),
+                    "ModelDataUrl": model_artifact,
+                }
+            ],
+            "SupportedContentTypes": ["text/csv"],
+            "SupportedResponseMIMETypes": ["text/csv"],
+        },
+        ApprovalStatus="PendingManualApproval",
     )
 
-    # Register in Model Registry
-    model_package = sm_model.register(
-        content_types=["text/csv"],
-        response_types=["text/csv"],
-        model_package_group_name=model_package_group_name,
-        inference_instances=["ml.m5.large"],
-        transform_instances=["ml.m5.large"],
-        approval_status="PendingManualApproval"
-    )
+    print(f"✅ Model registered in group {model_package_group_name}")
+    return model_package
 
-    print(f"✅ Registered model: {model_package.model_package_arn}")
-    return model_package.model_package_arn
 
-# ✅ Run when script is executed directly
 if __name__ == "__main__":
-    model_file = "/tmp/model/model.pkl"  # 🔥 Make sure this file exists (from train.py output)
-    arn = register_model(model_file)
-    print("🎯 Model registered in Model Registry")
+    model_file = "/tmp/model/model.pkl"  # make sure train.py saved here
+    if not os.path.exists(model_file):
+        raise FileNotFoundError(f"{model_file} not found. Run train.py first.")
+
+    register_model(model_file)
