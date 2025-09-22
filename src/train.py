@@ -1,93 +1,93 @@
 # src/train.py
-
-import os
+import pandas as pd
+import mlflow
+import mlflow.sklearn
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef
+from sklearn.model_selection import train_test_split
 import boto3
 import pickle
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.model_selection import train_test_split
-from sagemaker.experiments.run import Run
+import os
+import time
+from sagemaker import image_uris
 
-# --- Config ---
-S3_BUCKET = "creditcardnew"
-TRAIN_S3_PATH = f"s3://{S3_BUCKET}/fraud-data/train/train.csv"
-EXPERIMENT_NAME = "fraud-detection-exp"
-MODEL_REGISTRY_GROUP = "fraud-detection-model-group"
+# --- Training and Logging ---
+def train_and_log(train_s3_uri, experiment_name="fraud-detection-exp", run_name="rf_run"):
+    mlflow.set_experiment(experiment_name)
 
-def load_data(s3_uri):
-    """Load dataset directly from S3"""
-    return pd.read_csv(s3_uri)
+    with mlflow.start_run(run_name=run_name) as run:
+        # --- Load Data ---
+        df = pd.read_csv(train_s3_uri)
+        X = df.drop("Class", axis=1)
+        y = df["Class"]
 
-def train_and_log():
-    # --- Load data ---
-    df = load_data(TRAIN_S3_PATH)
-    X = df.drop("Class", axis=1)
-    y = df["Class"]
+        # --- Train/Test Split ---
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+        # --- Model Parameters ---
+        params = {"n_estimators": 100, "max_depth": 8, "random_state": 42}
+        mlflow.log_params(params)
 
-    params = {"n_estimators": 100, "max_depth": 8, "random_state": 42}
-
-    # --- Start Experiment Run ---
-    with Run(experiment_name=EXPERIMENT_NAME) as run:
-        # Train model
+        # --- Train Model ---
         model = RandomForestClassifier(**params)
         model.fit(X_train, y_train)
 
-        # Predictions
+        # --- Evaluate Model ---
         y_pred = model.predict(X_val)
-
-        # Metrics
         metrics = {
             "accuracy": accuracy_score(y_val, y_pred),
             "precision": precision_score(y_val, y_pred, zero_division=0),
             "recall": recall_score(y_val, y_pred, zero_division=0),
             "f1": f1_score(y_val, y_pred, zero_division=0),
+            "mcc": matthews_corrcoef(y_val, y_pred),
         }
+        mlflow.log_metrics(metrics)
 
-        # Log params & metrics to SageMaker Experiments
-        for k, v in params.items():
-            run.log_parameter(k, v)
-        for k, v in metrics.items():
-            run.log_metric(k, v)
-
-        print("📊 Metrics:", metrics)
-
-        # Save model locally
+        # --- Save Model as Pickle ---
         os.makedirs("/tmp/model", exist_ok=True)
         model_file = "/tmp/model/model.pkl"
         with open(model_file, "wb") as f:
             pickle.dump(model, f)
 
-        # Upload model to S3
-        s3_client = boto3.client("s3")
-        s3_key = f"models/rf/{run.run_name}/model.pkl"
-        s3_client.upload_file(model_file, S3_BUCKET, s3_key)
-        model_s3_uri = f"s3://{S3_BUCKET}/{s3_key}"
-        print("✅ Model uploaded to:", model_s3_uri)
+        # --- Upload to S3 ---
+        s3 = boto3.client("s3")
+        bucket = "creditcardnew"
+        s3_key = f"models/rf/{run.info.run_id}/model.pkl"
+        s3.upload_file(model_file, bucket, s3_key)
+        model_s3_uri = f"s3://{bucket}/{s3_key}"
+        print(f"✅ Uploaded model to {model_s3_uri}")
 
         # --- Register Model in SageMaker Model Registry ---
         sm_client = boto3.client("sagemaker")
-        model_package = sm_client.create_model_package(
-            ModelPackageGroupName=MODEL_REGISTRY_GROUP,
+        model_package_group = "fraud-detection-registry"
+
+        # Create Model Package Group (only if not exists)
+        try:
+            sm_client.create_model_package_group(
+                ModelPackageGroupName=model_package_group,
+                ModelPackageGroupDescription="Fraud detection model registry"
+            )
+            print(f"✅ Created ModelPackageGroup: {model_package_group}")
+        except sm_client.exceptions.ResourceInUse:
+            print(f"ℹ️ ModelPackageGroup {model_package_group} already exists")
+
+        # ✅ Dynamically get the correct SKLearn image for your region
+        region = boto3.Session().region_name
+        sklearn_image = image_uris.retrieve(
+            framework="sklearn",
+            region=region,
+            version="1.0-1",
+            image_scope="inference"
+        )
+
+        # Register the model
+        model_pkg = sm_client.create_model_package(
+            ModelPackageGroupName=model_package_group,
             ModelPackageDescription="Fraud detection RF model",
             InferenceSpecification={
                 "Containers": [
                     {
-                        "Image": "382416733822.dkr.ecr.us-east-1.amazonaws.com/sklearn-inference:1.0-1",  # sklearn container
-                        "ModelDataUrl": model_s3_uri,
-                    }
-                ],
-                "SupportedContentTypes": ["text/csv"],
-                "SupportedResponseMIMETypes": ["text/csv"],
-            },
-            ModelApprovalStatus="PendingManualApproval",
-        )
-
-        print("✅ Model registered in Model Registry:", model_package["ModelPackageArn"])
-
-if __name__ == "__main__":
-    train_and_log()
+                        "Image": sklearn_image,
+                        "ModelDataUrl": mod
