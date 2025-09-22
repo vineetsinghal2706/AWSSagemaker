@@ -1,0 +1,6 @@
+artifact_location: file:///home/sagemaker-user/AWSSagemaker/src/mlruns/981040128103110273
+creation_time: 1758521910268
+experiment_id: '981040128103110273'
+last_update_time: 1758521910268
+lifecycle_stage: active
+name: fraud_detection

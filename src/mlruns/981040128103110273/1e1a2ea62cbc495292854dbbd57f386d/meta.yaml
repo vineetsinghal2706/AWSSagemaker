@@ -1,0 +1,15 @@
+artifact_uri: file:///home/sagemaker-user/AWSSagemaker/src/mlruns/981040128103110273/1e1a2ea62cbc495292854dbbd57f386d/artifacts
+end_time: 1758521991456
+entry_point_name: ''
+experiment_id: '981040128103110273'
+lifecycle_stage: active
+run_id: 1e1a2ea62cbc495292854dbbd57f386d
+run_name: rf_run
+run_uuid: 1e1a2ea62cbc495292854dbbd57f386d
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1758521910856
+status: 3
+tags: []
+user_id: sagemaker-user
