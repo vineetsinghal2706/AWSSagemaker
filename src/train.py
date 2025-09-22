@@ -1,40 +1,35 @@
 # src/train.py
 import pandas as pd
-import numpy as np
-import mlflow
-import mlflow.sklearn
+import boto3
+import os
+import pickle
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef
-import boto3
-import pickle
-import os
 from sklearn.model_selection import train_test_split
+from sagemaker.experiments.run import Run
 
-def load_data(s3_uri):
-    return pd.read_csv(s3_uri)
+def train_and_log(train_s3_uri, experiment_name="fraud_detection", run_name="rf_run"):
+    # --- Load data ---
+    df = pd.read_csv(train_s3_uri)
+    X = df.drop('Class', axis=1)
+    y = df['Class']
 
-def train_and_log(train_s3_uri, test_s3_uri=None, mlflow_experiment='fraud_detection', run_name='rf_run'):
-    mlflow.set_experiment(mlflow_experiment)
-    with mlflow.start_run(run_name=run_name) as run:
-        # --- Load data ---
-        df = pd.read_csv(train_s3_uri)
-        X = df.drop('Class', axis=1)
-        y = df['Class']
+    X_train, X_val, y_train, y_val = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
 
-        # --- Train/test split ---
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
+    params = {"n_estimators": 100, "max_depth": 8, "random_state": 42}
 
-        # --- Model params ---
-        params = {"n_estimators": 100, "max_depth": 8, "random_state": 42}
-        mlflow.log_params(params)
+    # ✅ Open SageMaker Experiment run
+    with Run(experiment_name=experiment_name, run_name=run_name) as run:
+        # Log parameters
+        run.log_parameters(params)
 
-        # --- Train ---
+        # Train model
         model = RandomForestClassifier(**params)
         model.fit(X_train, y_train)
 
-        # --- Predict & evaluate ---
+        # Predict and evaluate
         y_pred = model.predict(X_val)
         metrics = {
             "accuracy": accuracy_score(y_val, y_pred),
@@ -43,38 +38,15 @@ def train_and_log(train_s3_uri, test_s3_uri=None, mlflow_experiment='fraud_detec
             "f1": f1_score(y_val, y_pred, zero_division=0),
             "mcc": matthews_corrcoef(y_val, y_pred)
         }
-        mlflow.log_metrics(metrics)
 
-        # --- Save model as .pkl ---
-        os.makedirs('/tmp/model', exist_ok=True)
+        # ✅ Log metrics to SageMaker
+        run.log_metrics(metrics)
+
+        # Save model
+        os.makedirs("/tmp/model", exist_ok=True)
         model_file = "/tmp/model/model.pkl"
         with open(model_file, "wb") as f:
             pickle.dump(model, f)
 
-        # --- Log model in MLflow ---
-        mlflow.sklearn.log_model(
-            sk_model=model,
-            artifact_path="model",
-            registered_model_name=None
-        )
-
-        # --- Upload artifact to S3 ---
-        s3 = boto3.client('s3')
-        S3_BUCKET = "creditcardnew"   # 🔥 hardcoded bucket
-        s3_key = f"models/rf/{run.info.run_id}/model.pkl"
-        if S3_BUCKET:
-            s3.upload_file(model_file, S3_BUCKET, s3_key)
-            s3_uri = f"s3://{S3_BUCKET}/{s3_key}"
-            mlflow.log_artifact(model_file, artifact_path="external_model_s3")
-            print("✅ Uploaded model to", s3_uri)
-
-        return run.info.run_id, metrics
-
-if __name__ == "__main__":
-    # 🔥 Hardcoded paths
-    TRAIN_S3_PATH = "s3://creditcardnew/fraud-data/train/train.csv"
-    EXPERIMENT_NAME = "fraud_detection"
-
-    run_id, metrics = train_and_log(TRAIN_S3_PATH, mlflow_experiment=EXPERIMENT_NAME)
-    print("✅ Training complete. Run ID:", run_id)
-    print("📊 Metrics:", metrics)
+        print("✅ Training done")
+        return model_file, metrics
