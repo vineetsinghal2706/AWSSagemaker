@@ -1,93 +1,80 @@
 # src/train.py
 import pandas as pd
+import numpy as np
 import mlflow
 import mlflow.sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef
-from sklearn.model_selection import train_test_split
 import boto3
 import pickle
 import os
-import time
-from sagemaker import image_uris
+from sklearn.model_selection import train_test_split
 
-# --- Training and Logging ---
-def train_and_log(train_s3_uri, experiment_name="fraud-detection-exp", run_name="rf_run"):
-    mlflow.set_experiment(experiment_name)
+def load_data(s3_uri):
+    return pd.read_csv(s3_uri)
 
+def train_and_log(train_s3_uri, test_s3_uri=None, mlflow_experiment='fraud_detection', run_name='rf_run'):
+    mlflow.set_experiment(mlflow_experiment)
     with mlflow.start_run(run_name=run_name) as run:
-        # --- Load Data ---
+        # --- Load data ---
         df = pd.read_csv(train_s3_uri)
-        X = df.drop("Class", axis=1)
-        y = df["Class"]
+        X = df.drop('Class', axis=1)
+        y = df['Class']
 
-        # --- Train/Test Split ---
+        # --- Train/test split ---
         X_train, X_val, y_train, y_val = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
 
-        # --- Model Parameters ---
+        # --- Model params ---
         params = {"n_estimators": 100, "max_depth": 8, "random_state": 42}
         mlflow.log_params(params)
 
-        # --- Train Model ---
+        # --- Train ---
         model = RandomForestClassifier(**params)
         model.fit(X_train, y_train)
 
-        # --- Evaluate Model ---
+        # --- Predict & evaluate ---
         y_pred = model.predict(X_val)
         metrics = {
             "accuracy": accuracy_score(y_val, y_pred),
             "precision": precision_score(y_val, y_pred, zero_division=0),
             "recall": recall_score(y_val, y_pred, zero_division=0),
             "f1": f1_score(y_val, y_pred, zero_division=0),
-            "mcc": matthews_corrcoef(y_val, y_pred),
+            "mcc": matthews_corrcoef(y_val, y_pred)
         }
         mlflow.log_metrics(metrics)
 
-        # --- Save Model as Pickle ---
-        os.makedirs("/tmp/model", exist_ok=True)
+        # --- Save model as .pkl ---
+        os.makedirs('/tmp/model', exist_ok=True)
         model_file = "/tmp/model/model.pkl"
         with open(model_file, "wb") as f:
             pickle.dump(model, f)
 
-        # --- Upload to S3 ---
-        s3 = boto3.client("s3")
-        bucket = "creditcardnew"
-        s3_key = f"models/rf/{run.info.run_id}/model.pkl"
-        s3.upload_file(model_file, bucket, s3_key)
-        model_s3_uri = f"s3://{bucket}/{s3_key}"
-        print(f"✅ Uploaded model to {model_s3_uri}")
-
-        # --- Register Model in SageMaker Model Registry ---
-        sm_client = boto3.client("sagemaker")
-        model_package_group = "fraud-detection-registry"
-
-        # Create Model Package Group (only if not exists)
-        try:
-            sm_client.create_model_package_group(
-                ModelPackageGroupName=model_package_group,
-                ModelPackageGroupDescription="Fraud detection model registry"
-            )
-            print(f"✅ Created ModelPackageGroup: {model_package_group}")
-        except sm_client.exceptions.ResourceInUse:
-            print(f"ℹ️ ModelPackageGroup {model_package_group} already exists")
-
-        # ✅ Dynamically get the correct SKLearn image for your region
-        region = boto3.Session().region_name
-        sklearn_image = image_uris.retrieve(
-            framework="sklearn",
-            region=region,
-            version="1.0-1",
-            image_scope="inference"
+        # --- Log model in MLflow ---
+        mlflow.sklearn.log_model(
+            sk_model=model,
+            artifact_path="model",
+            registered_model_name=None
         )
 
-        # Register the model
-        model_pkg = sm_client.create_model_package(
-            ModelPackageGroupName=model_package_group,
-            ModelPackageDescription="Fraud detection RF model",
-            InferenceSpecification={
-                "Containers": [
-                    {
-                        "Image": sklearn_image,
-                        "ModelDataUrl": mod
+        # --- Upload artifact to S3 ---
+        s3 = boto3.client('s3')
+        S3_BUCKET = "creditcardnew"   # 🔥 hardcoded bucket
+        s3_key = f"models/rf/{run.info.run_id}/model.pkl"
+        if S3_BUCKET:
+            s3.upload_file(model_file, S3_BUCKET, s3_key)
+            s3_uri = f"s3://{S3_BUCKET}/{s3_key}"
+            mlflow.log_artifact(model_file, artifact_path="external_model_s3")
+            print("✅ Uploaded model to", s3_uri)
+
+        return run.info.run_id, metrics
+
+if __name__ == "__main__":
+    # 🔥 Hardcoded paths
+    TRAIN_S3_PATH = "s3://creditcardnew/fraud-data/train/train.csv"
+    EXPERIMENT_NAME = "fraud_detection"
+
+    run_id, metrics = train_and_log(TRAIN_S3_PATH, mlflow_experiment=EXPERIMENT_NAME)
+    print("✅ Training complete. Run ID:", run_id)
+    print("📊 Metrics:", metrics)
