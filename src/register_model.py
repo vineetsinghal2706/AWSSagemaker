@@ -3,24 +3,27 @@ import sagemaker
 import boto3
 import os
 from sagemaker.model import Model
-from sagemaker import get_execution_role
 
-# ✅ Initialize SageMaker session & boto3 client
+# ⚠️ Use SageMaker Execution Role, not IAM user
+# Pass through ENV or hardcode
+role = os.getenv("SAGEMAKER_ROLE_ARN", "arn:aws:iam::893169065109:role/datazone_usr_role_6gknc254ej3jfr_5251772u38j19j")
+
 sagemaker_session = sagemaker.Session()
 sm_client = boto3.client("sagemaker")
-role = os.getenv("SAGEMAKER_ROLE_ARN", get_execution_role())
+
 
 def register_model(model_file, model_package_group_name="FraudDetectionModelGroup"):
-    """
-    Registers the trained model into SageMaker Model Registry
-    """
+    if not os.path.exists(model_file):
+        raise FileNotFoundError(f"{model_file} not found. Run train.py first.")
+
     # Upload model artifact to S3
     bucket = sagemaker_session.default_bucket()
-    model_artifact = sagemaker_session.upload_data(path=model_file, bucket=bucket, key_prefix="model-artifacts")
+    model_artifact = sagemaker_session.upload_data(
+        path=model_file, bucket=bucket, key_prefix="model-artifacts"
+    )
+    print(f"✅ Uploaded model to {model_artifact}")
 
-    print(f"✅ Model artifact uploaded: {model_artifact}")
-
-    # Create model package in Model Registry
+    # Register in Model Registry
     model_package = sm_client.create_model_package(
         ModelPackageGroupName=model_package_group_name,
         ModelPackageDescription="Fraud detection RandomForest model",
@@ -30,7 +33,7 @@ def register_model(model_file, model_package_group_name="FraudDetectionModelGrou
                     "Image": sagemaker.image_uris.retrieve(
                         framework="sklearn",
                         region=sagemaker_session.boto_region_name,
-                        version="1.2-1",  # pick sklearn version
+                        version="1.2-1",
                     ),
                     "ModelDataUrl": model_artifact,
                 }
@@ -41,13 +44,10 @@ def register_model(model_file, model_package_group_name="FraudDetectionModelGrou
         ApprovalStatus="PendingManualApproval",
     )
 
-    print(f"✅ Model registered in group {model_package_group_name}")
+    print(f"✅ Model registered in {model_package_group_name}")
     return model_package
 
 
 if __name__ == "__main__":
-    model_file = "/tmp/model/model.pkl"  # make sure train.py saved here
-    if not os.path.exists(model_file):
-        raise FileNotFoundError(f"{model_file} not found. Run train.py first.")
-
+    model_file = "/tmp/model/model.pkl"
     register_model(model_file)
