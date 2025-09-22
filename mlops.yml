@@ -1,0 +1,46 @@
+name: Fraud Detection MLOps
+
+on:
+  push:
+    branches: [ "main" ]   # run pipeline on push to main
+  workflow_dispatch:        # allow manual trigger
+
+jobs:
+  build-and-train:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout code
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    # Setup Python
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    # Install dependencies
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install boto3 sagemaker pandas scikit-learn mlflow
+
+    # Configure AWS Credentials
+    - name: Configure AWS
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    # Run preprocessing (splits creditcard.csv in S3 into train/infer)
+    - name: Run preprocessing
+      run: |
+        python src/preprocess.py
+
+    # Submit training job to SageMaker
+    - name: Submit training job
+      run: |
+        python src/train.py
